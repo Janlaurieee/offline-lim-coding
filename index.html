@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixel Flappy Clone</title>
+    <style>
+        /* ------------------- */
+        /* CSS STYLING & PIXEL ART EMULATION */
+        /* ------------------- */
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #73d2ff; /* Sky Blue background */
+            font-family: 'Press Start 2P', monospace; /* A retro font feel */
+            user-select: none;
+        }
+
+        #game-container {
+            border: 5px solid #4b2c0e; /* Dark brown border for the screen frame */
+            box-shadow: 8px 8px 0 #6a3d1e; /* Pixel shadow effect */
+            background-color: #87cefa; /* Lighter sky blue inside the game area */
+        }
+
+        /* Hide any default cursor styling for a cleaner arcade look */
+        canvas {
+            display: block;
+        }
+
+        #score {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 48px; /* Large pixel score text */
+            color: #333;
+            text-shadow: 3px 3px 0 #ccc; /* Pixel shadow on score */
+            background: rgba(255, 255, 255, 0.6);
+            padding: 10px 20px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- The canvas is the drawing surface for the game -->
+    <div id="game-container">
+        <canvas id="flappyCanvas" width="320" height="480"></canvas>
+    </div>
+
+    <!-- Score display (positioned outside the canvas for easier CSS management) -->
+    <div id="score">Score: 0</div>
+
+
+    <script>
+        // ===================================
+        // JAVASCRIPT GAME LOGIC
+        // ===================================
+
+        const canvas = document.getElementById('flappyCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+
+        // Game Constants (using pixel dimensions)
+        const WIDTH = 320;
+        const HEIGHT = 480;
+        const GRAVITY = 0.5;
+        const JUMP_STRENGTH = -10; // Negative because canvas Y is top-down
+        const PIPE_WIDTH = 30;
+        const GAP_SIZE = 120; // Vertical gap size
+
+        // Game State Variables
+        let birdY = HEIGHT / 2;
+        let birdVelocity = 0;
+        let score = 0;
+        let isPlaying = false;
+        let gameLoopId;
+        let pipes = [];
+        let lastPipeTime = 0;
+
+        // --- 1. PIXEL ART DRAWING FUNCTIONS ---
+
+        /** Draws a blocky rectangle with defined colors */
+        function drawPixelRect(x, y, w, h, color) {
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y, w, h);
+            // Optional: Add a 1px dark border for stronger pixel effect
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x, y, w, h);
+        }
+
+        /** Draws the bird (a simple yellow block with small black eyes) */
+        function drawBird(y, velocity) {
+            const size = 20;
+            // Body: Bright Yellow Pixel Block
+            drawPixelRect(50, y, size, size * 1.3, '#FFD700');
+
+            // Eye (Black pixel block)
+            ctx.fillStyle = 'black';
+            ctx.fillRect(65, y + 5, 2, 2); // Left eye
+            ctx.fillRect(75, y + 5, 2, 2); // Right eye
+
+            // Tilt effect based on velocity (makes it feel like it's flying)
+            const tilt = Math.min(10, Math.max(-10, velocity * 3));
+            ctx.save();
+            ctx.translate(60 + size / 2, y + size * 1.3 / 2);
+            ctx.rotate(tilt * (Math.PI / 180));
+            ctx.restore();
+
+        }
+
+        /** Draws a single pipe (pixelated brown/green blocks) */
+        function drawPipe(x, topHeight, bottomY) {
+            const color = '#6B8E23'; // Dark Olive Green for foliage effect
+            const border = '#4b2c0e'; // Brown pixel frame
+
+            // Top Pipe Block
+            drawPixelRect(x, 0, PIPE_WIDTH, topHeight, color);
+            // Bottom Pipe Block
+            drawPixelRect(x, bottomY, PIPE_WIDTH, HEIGHT - bottomY, color);
+
+            // Pixelated 'Frame' (Brown)
+            drawPixelRect(x - 2, 0 - 2, PIPE_WIDTH + 4, topHeight + 2, border); // Top frame overlap
+            drawPixelRect(x - 2, HEIGHT - bottomY - 2, PIPE_WIDTH + 4, 4, border); // Bottom frame overlap
+
+        }
+
+
+        // --- 2. GAME MECHANICS ---
+
+        /** Updates the bird's position based on gravity and velocity */
+        function updateBird() {
+            birdVelocity += GRAVITY;
+            birdY += birdVelocity;
+
+            // Simple terminal velocity cap
+            if (Math.abs(birdVelocity) > 15) {
+                birdVelocity = Math.sign(birdVelocity) * 15;
+            }
+        }
+
+        /** Handles the jumping action */
+        function jump() {
+            if (!isPlaying) return;
+            birdVelocity = JUMP_STRENGTH;
+        }
+
+        /** Generates and manages pipes (obstacles) */
+        function generatePipes(deltaTime) {
+            // Control pipe generation frequency (every 1.5 to 2 seconds)
+            if (deltaTime > lastPipeTime + Math.random() * 1000 + 1000) {
+                const minTopHeight = 50;
+                const maxHeight = HEIGHT - 50 - GAP_SIZE;
+
+                // Randomly determine the height of the top pipe
+                let topHeight = Math.floor(Math.random() * (maxHeight - minTopHeight + 1)) + minTopHeight;
+                
+                pipes.push({
+                    x: WIDTH,
+                    topHeight: topHeight,
+                    bottomY: topHeight + GAP_SIZE,
+                    scored: false
+                });
+
+                lastPipeTime = deltaTime;
+            }
+
+            // Move and filter pipes
+            pipes.forEach(pipe => {
+                pipe.x -= 3; // Pipe speed
+            });
+
+            // Keep only pipes that are visible or just off-screen
+            pipes = pipes.filter(pipe => pipe.x + PIPE_WIDTH > 0);
+        }
+
+        /** Checks if the bird collided with any obstacle */
+        function checkCollision() {
+            const birdLeft = 40;
+            const birdRight = 80;
+            const birdTop = birdY - 15; // Estimate top edge based on drawing
+            const birdBottom = birdY + 30;
+
+            for (let i = 0; i < pipes.length; i++) {
+                const pipe = pipes[i];
+
+                // Check X overlap: Is the bird near this pipe?
+                if (birdRight > pipe.x && birdLeft < pipe.x + PIPE_WIDTH) {
+                    // Collision with Top Pipe
+                    if (birdTop < pipe.topHeight) return true; 
+                    
+                    // Collision with Bottom Pipe
+                    if (birdBottom > pipe.bottomY - 10) return true;
+                }
+            }
+
+            return false; // No collision
+        }
+
+        /** Checks if the bird passed a pipe to update score */
+        function checkScore() {
+             for (let i = 0; i < pipes.length; i++) {
+                const pipe = pipes[i];
+                // If the pipe has passed the bird's x position AND hasn't been scored yet
+                if (!pipe.scored && pipe.x + PIPE_WIDTH < 50) { 
+                    score++;
+                    scoreElement.textContent = `Score: ${score}`;
+                    pipes[i].scored = true;
+                }
+            }
+        }
+
+
+        // --- 3. MAIN GAME LOOP ---
+
+        /** The main drawing and update function */
+        function gameLoop(timestamp) {
+            if (!isPlaying) return;
+
+            const deltaTime = timestamp - (gameLoop.lastTimestamp || timestamp);
+            gameLoop.lastTimestamp = timestamp;
+            
+            // 1. Clear the canvas (Redraw sky background for a clean slate)
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            // Redrawing the main background color to maintain pixel look
+            drawPixelRect(0, 0, WIDTH, HEIGHT, '#87cefa');
+
+
+            // 2. Update State
+            updateBird();
+            generatePipes(timestamp);
+            checkScore();
+
+            // 3. Check Game Over Conditions
+            if (checkCollision() || birdY < 0 || birdY > HEIGHT - 30) {
+                gameOver();
+                return;
+            }
+
+            // 4. Draw Everything
+            drawBird(birdY, birdVelocity);
+            pipes.forEach(pipe => drawPipe(pipe.x, pipe.topHeight, pipe.bottomY));
+
+
+            // Request the next frame
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        /** Initializes or resets the game */
+        function startGame() {
+            if (isPlaying) return; // Already running
+
+            birdY = HEIGHT / 2;
+            birdVelocity = 0;
+            score = 0;
+            pipes = [];
+            lastPipeTime = 0;
+            isPlaying = true;
+            scoreElement.textContent = `Score: 0`;
+            gameLoop();
+        }
+
+        /** Handles game end state */
+        function gameOver() {
+            cancelAnimationFrame(gameLoopId);
+            isPlaying = false;
+            alert(`GAME OVER! Your final score is ${score}.\n\nPress OK to restart.`);
+            startGame();
+        }
+
+
+        // --- EVENT LISTENERS ---
+
+        document.addEventListener('keydown', (e) => {
+            if (!isPlaying && e.key === ' ' || e.key === 'Enter') {
+                startGame();
+            } else if (isPlaying && e.key === ' ') {
+                jump();
+            }
+        });
+
+        // Click or tap equivalent
+        window.addEventListener('mousedown', () => {
+             if (!isPlaying) {
+                 startGame();
+             } else {
+                jump();
+             }
+        });
+
+
+    </script>
+</body>
+</html>
